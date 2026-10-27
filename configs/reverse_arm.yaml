@@ -1,0 +1,24 @@
+# Reverse frequency-swap arm (paper Sec. 4.6): low frequencies from the
+# Direct Parent, high frequencies from the Diffusion Parent. Everything
+# else identical to the main recipe. Used to test whether the band
+# assignment direction is causal.
+
+seed: 42
+t0: 4
+gamma_mode: stats
+gamma_fixed: 2.36
+flare_prob: 1.0
+flare_dirs:
+  - /path/to/Flare7Kpp/Flare7K/Scattering_Flare/Compound_Flare
+  - /path/to/Flare7Kpp/Flare7K/Reflective_Flare
+  - /path/to/Flare7Kpp/Flare-R/Compound_Flare
+stats_json: configs/degradation_stats.json
+day_dir: /path/to/bdd100k_day_images
+labels_dir: /path/to/bdd_day_labels
+renderer_ckpt: /path/to/Ema_I150000.pth
+sigma: 8
+direction: reverse
+
+out_dir: outputs/fsda_reverse
+fp_dir: outputs/direct_parent      # reuse the parents of the main run
+fs_dir: outputs/diffusion_parent

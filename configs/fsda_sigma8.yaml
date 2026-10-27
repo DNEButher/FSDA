@@ -1,0 +1,32 @@
+# FSDA main recipe (paper Sec. 3, sigma = 8).
+# Generate Direct Parent -> Diffusion Parent -> frequency recomposition.
+
+seed: 42
+t0: 4                    # SDEdit warm-start step, Eq.(3)
+gamma_mode: stats        # stats = quantile-calibrated sampling; fixed = gamma_fixed
+gamma_fixed: 2.36
+flare_prob: 1.0          # probability of injecting a flare per image, Eq.(2)
+
+# Flare7K++ library directories (download: see README "Datasets")
+flare_dirs:
+  - /path/to/Flare7Kpp/Flare7K/Scattering_Flare/Compound_Flare
+  - /path/to/Flare7Kpp/Flare7K/Reflective_Flare
+  - /path/to/Flare7Kpp/Flare-R/Compound_Flare
+
+# calibrated degradation constants (precomputed on BDD; see the paper's
+# calibration protocol — constants ship ready-to-use, no recalibration needed)
+stats_json: configs/degradation_stats.json
+
+# labeled daytime images (jpg); labels: same-stem txt files (YOLO format)
+day_dir: /path/to/bdd100k_day_images
+labels_dir: /path/to/bdd_day_labels
+
+# trained day->night renderer (generation/train_renderer.py or GitHub Releases)
+renderer_ckpt: /path/to/Ema_I150000.pth
+
+sigma: 8                 # Gaussian scale of the log-luma split, Eq.(4)
+direction: forward       # forward = FSDA (L_diff + H_dir); reverse = ablation arm
+
+out_dir: outputs/fsda
+fp_dir: outputs/direct_parent      # Direct Parent  (photometric chain only)
+fs_dir: outputs/diffusion_parent   # Diffusion Parent (same init + 4-step DDIM)

@@ -1,0 +1,26 @@
+# Detection training recipe (YOLO11n) — IDENTICAL for every arm
+# (fairness protocol, paper Sec. 4.1). The only variable across arms
+# is the training data yaml passed to training/train_yolo.py --data.
+
+weights: yolo11n.pt      # official pretrained weights (ultralytics auto-download)
+epochs: 100
+batch: 16
+imgsz: 1280
+patience: 100
+seed: 42
+deterministic: true
+optimizer: auto
+lr0: 0.01
+cos_lr: false
+mosaic: 1.0
+close_mosaic: 10
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+scale: 0.5
+translate: 0.1
+fliplr: 0.5
+amp: true
+rect: false
+workers: 8
+project: runs            # checkpoints land in runs/ft_<name>/weights/best.pt
