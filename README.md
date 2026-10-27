@@ -37,9 +37,6 @@ generation/
   d2n_dataset.py          DarkDriving 成对昼夜数据集
   _sr3/                   vendored 的 SR3 式扩散最小子集 (归属说明见其
                           __init__.py)
-fidelity/
-  analyze_fidelity.py     监督保真度分析 (相对白天原图的框内高频 NCC /
-                          边缘 NCC / log-luma 统计)
 training/
   train_yolo.py           YOLO11n 微调 (公平性协议)
 evaluation/
@@ -129,8 +126,7 @@ python generation/diffusion_parent.py --config configs/fsda_sigma8.yaml --shard 
 多种子 (seed 42/43/44, 均值±标准差)：FSDA **0.4631 ± 0.0087**，纯白天基线
 0.4234 ± 0.0096 —— +4 个百分点的增益远超种子间噪声。同一组检查点零样本迁移
 (不做目标域训练)：ACDC-night +0.90、NightCity +0.89、Dark Zurich +0.29 AP50
-(相对纯白天基线)。完整对比表、真夜数据预算-价值研究、监督保真度分析
-(`fidelity/analyze_fidelity.py`) 见论文。
+(相对纯白天基线)。完整对比表与真夜数据预算-价值研究见论文。
 
 ## 从头训练渲染器
 
