@@ -7,3 +7,4 @@ runs/
 *.cache
 .ipynb_checkpoints/
 .DS_Store
+.idea/
