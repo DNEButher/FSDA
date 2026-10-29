@@ -10,21 +10,29 @@ FSDA 把**带标注的白天图像**变成夜间训练视图，全程不改动�
          └─ 同一退化链 + 4 步条件 DDIM (SDEdit 暖启动)
                   └──────────► 扩散亲本 Diffusion Parent (结构可靠)
 
-log-luma 频段交换:   FSDA = 扩散亲本的低频段
-                          + 直接亲本的高频段          (式 4-6)
+统一交换算子:   FSDA(x) = RGB_diff · exp( w(x) · (H_dir − H_diff) )   (式 4-7)
+               w(x) = 1                        → 全交换 (FSDA-uniform)
+               w(x) = 1 − smoothstep(LP_diff;   → 自适应形式 (论文默认):
+                     τ1 = −1.40, τ2 = −0.60)      暗区换入直贴高频,
+                                                  发光亮区保住扩散低频
 ```
 
-由于两个亲本共享完全相同的几何，重组图像上的每个真值框依然有效 —— 增广在注入夜间外观多样性的同时保持了监督信息。在 BDD100K 上以固定的 YOLO11n 配方训练：向 7k 纯白天基线加入 7k 张 FSDA 视图，夜间 mAP50 从 **0.4216 提升到 0.4664 (+4.5)**。
+由于两个亲本共享完全相同的几何，重组图像上的每个真值框依然有效 —— 增广在注入夜间外观多样性的同时保持了监督信息。在 BDD100K 上以固定的 YOLO11n 配方训练：向 7k 纯白天基线加入 7k 张 FSDA 视图，夜间 mAP50 三种子均值从 **0.4234 提升到 0.4666（逐种子配对 +4.7 / +3.3 / +5.1 pp）**。
 
 | 亲本链路 (白天 / 直接 / 扩散 / FSDA) | 频率重组 |
 |---|---|
 | ![](examples/fsda_fig2_parents.png) | ![](examples/example_freqmix_panel_1.png) |
 
+自适应权重的激活图（viridis，暗→w=1 全交换，亮→w=0 保留扩散亲本；每行 = 扩散亲本 / w 图 / 自适应输出 / 全交换输出，固定下标采样无挑选）：
+
+![](examples/activation_wmap.png)
+
 ## 仓库结构
 
 ```
 configs/
-  fsda_sigma8.yaml        主配方 (退化 + 频率重组参数)
+  fsda_adaptive.yaml      主配方 (自适应形式, 论文默认)
+  fsda_sigma8.yaml        全交换消融配方 (FSDA-uniform, w≡1)
   reverse_arm.yaml        反向频段交换消融臂
   yolo11n.yaml            检测训练配方 (所有臂固定不变)
   degradation_stats.json  标定好的退化常数 (gamma 分位格、色彩增益、
@@ -32,7 +40,7 @@ configs/
 generation/
   direct_parent.py        光度退化链 + 眩光注入           (式 1-2)
   diffusion_parent.py     SDEdit 暖启动 + 4 步 DDIM        (式 3)
-  fsda_recompose.py       频率重组 + 训练集组装             (式 4-6)
+  fsda_recompose.py       频率重组 (含自适应权重) + 训练集组装 (式 4-7)
   train_renderer.py       从零训练昼夜渲染器
   d2n_dataset.py          DarkDriving 成对昼夜数据集
   _sr3/                   vendored 的 SR3 式扩散最小子集 (归属说明见其
@@ -44,7 +52,7 @@ evaluation/
 splits/
   bdd_day_train.txt       6,999 个白天训练 stem (论文的 7k 池)
   bdd_night_test.txt      3,877 个夜间测试 stem (留出集)
-examples/                 论文使用的定性图
+examples/                 论文使用的定性图 / 激活图
 ```
 
 ## 环境安装
@@ -85,11 +93,11 @@ python generation/direct_parent.py --config configs/fsda_sigma8.yaml
 #    再加 4 步条件 DDIM (GPU)
 python generation/diffusion_parent.py --config configs/fsda_sigma8.yaml
 
-# 3) FSDA 频率重组 + YOLO 训练集组装 (CPU)
-python generation/fsda_recompose.py --config configs/fsda_sigma8.yaml
+# 3) FSDA 频率重组 (自适应形式, 论文默认) + YOLO 训练集组装 (CPU)
+python generation/fsda_recompose.py --config configs/fsda_adaptive.yaml
 
 # 4) 训练检测器 (配方固定; 各臂唯一变量是数据 yaml)
-python training/train_yolo.py --data outputs/fsda/fsda_train.yaml --name fsda
+python training/train_yolo.py --data outputs/fsda_adaptive/fsda_train.yaml --name fsda
 
 # 5) 在留出的 BDD 夜间测试集上评测
 python evaluation/evaluate.py --weights runs/ft_fsda/weights/best.pt \
@@ -97,9 +105,14 @@ python evaluation/evaluate.py --weights runs/ft_fsda/weights/best.pt \
     --labels-dir /data/bdd100k_night/labels/test
 ```
 
-复现**反向频段交换消融**：复用同一对亲本，只换配置文件：
+复现消融臂：复用同一对亲本，只换配置文件——
 
 ```bash
+# 全交换 FSDA-uniform (w≡1)
+python generation/fsda_recompose.py --config configs/fsda_sigma8.yaml
+python training/train_yolo.py --data outputs/fsda/fsda_train.yaml --name fsda_uniform
+
+# 反向频段交换 (低频取直贴亲本)
 python generation/fsda_recompose.py --config configs/reverse_arm.yaml
 python training/train_yolo.py --data outputs/fsda_reverse/fsda_train.yaml --name fsda_reverse
 ```
@@ -115,18 +128,24 @@ python generation/diffusion_parent.py --config configs/fsda_sigma8.yaml --shard 
 
 ## 主要结果 (BDD100K 夜间测试集, 3,877 张, YOLO11n)
 
-| 训练集 (7k 白天 + 7k 增广) | mAP50 | mAP50-95 |
+| 训练集 (7k 白天 + 7k 增广) | mAP50 (3 种子均值 ± 标准差) | mAP50-95† |
 |---|---|---|
-| 纯白天基线 (无增广)                   | 0.4216 | — |
-| + ODGEN (最强外部基线)                | 0.4505 | — |
-| + 直接亲本 (ours)                     | 0.4491 | 0.2584 |
-| + 扩散亲本 (ours)                     | 0.4510 | 0.2619 |
-| **+ FSDA (ours)**                     | **0.4664** | **0.2670** |
+| 纯白天基线 (无增广)       | 0.4234 ± 0.0096 | — |
+| + ODGEN (最强外部基线)    | 0.4505 | — |
+| + 直接亲本 (ours)         | 0.4432 ± 0.0052 | 0.2607 |
+| + 扩散亲本 (ours)         | 0.4615 ± 0.0095 | 0.2638 |
+| + FSDA-uniform (w≡1)     | 0.4631 ± 0.0044 | 0.2691 |
+| **+ FSDA (自适应, 默认)** | **0.4666 ± 0.0014** | **0.2692** |
 
-多种子 (seed 42/43/44, 均值±标准差)：FSDA **0.4631 ± 0.0087**，纯白天基线
-0.4234 ± 0.0096 —— +4 个百分点的增益远超种子间噪声。同一组检查点零样本迁移
-(不做目标域训练)：ACDC-night +0.90、NightCity +0.89、Dark Zurich +0.29 AP50
-(相对纯白天基线)。完整对比表与真夜数据预算-价值研究见论文。
+† mAP50-95 为 seed42 单次评测 (与 mAP50 同一冻结评测协议)。
+自适应形式对纯白天基线的逐种子配对增益为 +4.7 / +3.3 / +5.1 pp (3/3 为正)，
+高于全交换形式的 +3.97 pp 均值——两类消融 (父本、交换方向、权重形式) 与
+因子归因见论文。
+
+零样本迁移 (同一组检查点, 不做目标域训练, 相对纯白天基线, 3 种子全正):
+ACDC-night **+1.35**、NightCity **+0.85**、Dark Zurich +0.36 AP50
+(自适应形式 3 种子均值; 两种权重形式 × 3 域 × 3 种子共 18/18 个配对为正)。
+完整对比表与真夜数据预算-价值研究见论文。
 
 ## 从头训练渲染器
 
@@ -145,7 +164,10 @@ python generation/train_renderer.py --dd-dir /data/DarkDriving_720p \
   `torch.manual_seed(seed + shard)`。因此两个亲本脚本对每张图产生*完全一致*
   的光度 draws —— 这正是配对构造保持标注有效的原因。
 - **逐位一致** — 全部生成侧数学 (退化常数、眩光仿射画布、DDIM 循环、频段
-  交换) 与论文实验运行所用代码完全相同。
+  交换、自适应权重) 与论文实验运行所用代码完全相同；`w≡0` 时输出与扩散
+  亲本逐位一致、`w≡1` 时与全交换臂逐位一致 (交换谱系的两个端点)。
+- **阈值冻结纪律** — 自适应权重的 τ1/τ2 是渲染前从全池统计分位冻结的常数，
+  代码与论文使用同一组值，不应按运行调参。
 - **验证集** — 组装出的数据 yaml 为方便起见把 `val` 设为训练集本身；论文
   运行是在一份内部验证集上选 `best.pt`。最终指标一律由
   `evaluation/evaluate.py` 在留出的夜间测试集上计算, 此差异只影响中间

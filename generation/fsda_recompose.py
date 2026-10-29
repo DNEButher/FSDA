@@ -1,15 +1,23 @@
-"""fsda_recompose.py — FSDA frequency recomposition (paper Eq. 4-6).
+"""fsda_recompose.py — FSDA frequency recomposition (paper Eq. 4-7).
 
-Uniform log-luminance band swap between the two parents, no network:
+Log-luminance band swap between the two parents, no network:
 
     Y_x  = 0.2126 R + 0.7152 G + 0.0722 B            (Rec.709 luma)
     L_x  = log(Y_x + eps),   H_x = L_x - blur_sigma(L_x)
-    forward (FSDA):  L_mix  = blur(L_diff) + H_dir
-                     RGB_mix = RGB_diff * exp(L_mix) / (Y_diff + eps)
+    forward (FSDA):  RGB_mix = RGB_diff * exp( w(x) * (H_dir - H_diff) )
+
+    w(x) = 1 everywhere            -> FSDA-uniform (ablation arm)
+    w(x) = 1 - smoothstep(LP_diff; tau1, tau2)
+                                   -> FSDA adaptive form (paper default):
+                                     dark regions swap fully, glowing
+                                     light sources keep the Diffusion
+                                     Parent's low band
     reverse arm:     swap the roles of the two parents.
 
 Low frequencies (illumination / bloom / tone) come from the Diffusion
 Parent; high frequencies (edges / texture) come from the Direct Parent.
+tau1/tau2 are frozen quantiles of the pooled LP_diff statistics (paper
+Sec. 3) — do not tune them per run.
 
 After mixing, the script assembles a YOLO training set:
 
@@ -22,7 +30,7 @@ After mixing, the script assembles a YOLO training set:
 Idempotent: existing files are skipped, never overwritten.
 
 Usage:
-    python generation/fsda_recompose.py --config configs/fsda_sigma8.yaml \
+    python generation/fsda_recompose.py --config configs/fsda_adaptive.yaml \
         [--workers 12] [--mix-only | --assemble-only]
 """
 import argparse
@@ -42,6 +50,8 @@ REPO = Path(__file__).resolve().parents[1]
 _FP = _FS = _OUT = None
 _SIGMA = 8
 _DIRECTION = 'forward'
+_WEIGHT = 'uniform'
+_TAU1 = _TAU2 = None
 
 
 def blur(l, sigma):
@@ -62,21 +72,39 @@ def luma(rgb):
     return 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
 
 
-def freqmix(rgb_hi, rgb_lo, sigma):
-    """Keep the high band of `rgb_hi` and the low band of `rgb_lo`.
+def adaptive_w(lp_lo, tau1, tau2):
+    """Swap weight from the low band of the Diffusion Parent (Eq. 7).
+
+    w = 1 (full swap) in dark regions -> smoothstep -> w = 0 (keep the
+    Diffusion Parent) around bright / glowing light sources.
+    """
+    t = np.clip((lp_lo - tau1) / (tau2 - tau1), 0.0, 1.0)
+    return 1.0 - t * t * (3.0 - 2.0 * t)
+
+
+def freqmix(rgb_hi, rgb_lo, sigma, w_map=None):
+    """Blend the high band of `rgb_hi` into `rgb_lo`, weighted by `w_map`.
 
     forward arm: hi = Direct Parent, lo = Diffusion Parent.
+    w_map = None keeps the original uniform-swap arithmetic bit-exact
+    (gate-verified against the frozen campaign renders); a 2-D w_map
+    follows the adaptive form  RGB = RGB_lo * exp(w * (H_hi - H_lo)).
     """
     y_hi, y_lo = luma(rgb_hi), luma(rgb_lo)
     l_hi, l_lo = np.log(y_hi + EPS), np.log(y_lo + EPS)
-    l_mix = blur(l_lo, sigma) + l_hi - blur(l_hi, sigma)
-    out = rgb_lo * (np.exp(l_mix) / (y_lo + EPS))[..., None]
+    if w_map is None:
+        l_mix = blur(l_lo, sigma) + l_hi - blur(l_hi, sigma)
+        out = rgb_lo * (np.exp(l_mix) / (y_lo + EPS))[..., None]
+    else:
+        d = (l_hi - blur(l_hi, sigma)) - (l_lo - blur(l_lo, sigma))
+        out = rgb_lo * np.exp(w_map * d)[..., None]
     return np.clip(out, 0.0, 1.0)
 
 
-def _init(fp, fs, out, sigma, direction):
-    global _FP, _FS, _OUT, _SIGMA, _DIRECTION
+def _init(fp, fs, out, sigma, direction, weight, tau1, tau2):
+    global _FP, _FS, _OUT, _SIGMA, _DIRECTION, _WEIGHT, _TAU1, _TAU2
     _FP, _FS, _OUT, _SIGMA, _DIRECTION = fp, fs, out, sigma, direction
+    _WEIGHT, _TAU1, _TAU2 = weight, tau1, tau2
 
 
 def work(stem):
@@ -88,9 +116,16 @@ def work(stem):
     fs = np.asarray(Image.open(_FS / f'{stem}.png').convert('RGB')
                     ).astype('float32') / 255.0
     if _DIRECTION == 'forward':
-        out = freqmix(fp, fs, _SIGMA)     # low from fs, high from fp
+        rgb_hi, rgb_lo = fp, fs          # low from fs, high from fp
     else:
-        out = freqmix(fs, fp, _SIGMA)     # reverse arm
+        rgb_hi, rgb_lo = fs, fp          # reverse arm
+    if _WEIGHT == 'adaptive':
+        assert _DIRECTION == 'forward', 'adaptive weight is forward-only'
+        lp_lo = blur(np.log(luma(rgb_lo) + EPS), _SIGMA)
+        w = adaptive_w(lp_lo, _TAU1, _TAU2)
+        out = freqmix(rgb_hi, rgb_lo, _SIGMA, w)
+    else:
+        out = freqmix(rgb_hi, rgb_lo, _SIGMA)            # uniform w == 1
     Image.fromarray((out * 255).astype('uint8')).save(d)
     return 0
 
@@ -160,17 +195,24 @@ def main():
     out_dir = Path(cfg['out_dir'])
     sigma = int(cfg.get('sigma', 8))
     direction = cfg.get('direction', 'forward')
+    weight = cfg.get('weight', 'uniform')
     assert direction in ('forward', 'reverse'), direction
+    assert weight in ('uniform', 'adaptive'), weight
+    tau1 = float(cfg.get('tau1', -1.40))
+    tau2 = float(cfg.get('tau2', -0.60))
+    if weight == 'adaptive':
+        assert direction == 'forward', 'adaptive weight is forward-only'
     img_tr = out_dir / 'images' / 'train'
     img_tr.mkdir(parents=True, exist_ok=True)
 
     if not args.assemble_only:
         stems = sorted(p.stem for p in fs_dir.glob('*.png')
                        if (fp_dir / f'{p.stem}.png').exists())
-        print(f'[fx-gen] direction={direction} sigma={sigma} stems={len(stems)}',
-              flush=True)
+        print(f'[fx-gen] direction={direction} weight={weight} '
+              f'sigma={sigma} stems={len(stems)}', flush=True)
         with Pool(args.workers, initializer=_init,
-                  initargs=(fp_dir, fs_dir, img_tr, sigma, direction)) as pool:
+                  initargs=(fp_dir, fs_dir, img_tr, sigma, direction,
+                            weight, tau1, tau2)) as pool:
             for i, _ in enumerate(pool.imap_unordered(work, stems, chunksize=32)):
                 if (i + 1) % 1000 == 0:
                     print(f'  [{i + 1}/{len(stems)}]', flush=True)

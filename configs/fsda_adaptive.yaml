@@ -1,0 +1,30 @@
+# FSDA main recipe — adaptive form (paper default, Eq. 7).
+# Same parents as fsda_sigma8.yaml; only the recomposition differs:
+# the swap weight w(x) follows the low band of the Diffusion Parent —
+# dark regions swap fully, glowing light sources keep the Diffusion
+# Parent's band. tau1/tau2 are frozen pool-quantile constants: do not
+# tune them per run.
+
+seed: 42
+t0: 4
+gamma_mode: stats
+gamma_fixed: 2.36
+flare_prob: 1.0
+flare_dirs:
+  - /path/to/Flare7Kpp/Flare7K/Scattering_Flare/Compound_Flare
+  - /path/to/Flare7Kpp/Reflective_Flare
+  - /path/to/Flare7Kpp/Flare-R/Compound_Flare
+stats_json: configs/degradation_stats.json
+day_dir: /path/to/bdd100k_day_images
+labels_dir: /path/to/bdd_day_labels
+renderer_ckpt: /path/to/Ema_I150000.pth
+
+sigma: 8
+direction: forward
+weight: adaptive          # w(x) = 1 - smoothstep(LP_diff; tau1, tau2)
+tau1: -1.40               # frozen before rendering (pool quantiles)
+tau2: -0.60
+
+out_dir: outputs/fsda_adaptive
+fp_dir: outputs/direct_parent      # reuse the parents of the main run
+fs_dir: outputs/diffusion_parent

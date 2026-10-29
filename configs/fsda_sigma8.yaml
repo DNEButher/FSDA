@@ -26,6 +26,9 @@ renderer_ckpt: /path/to/Ema_I150000.pth
 
 sigma: 8                 # Gaussian scale of the log-luma split, Eq.(4)
 direction: forward       # forward = FSDA (L_diff + H_dir); reverse = ablation arm
+weight: uniform          # w == 1 everywhere (FSDA-uniform ablation arm;
+                         # the paper default is the adaptive form, see
+                         # configs/fsda_adaptive.yaml)
 
 out_dir: outputs/fsda
 fp_dir: outputs/direct_parent      # Direct Parent  (photometric chain only)
